@@ -1,0 +1,191 @@
+apiVersion: v1
+items:
+  - apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: profiles-namespace
+  - apiVersion: networking.k8s.io/v1beta1
+    kind: Ingress
+    metadata:
+      name: profiles-ingress
+      namespace: profiles-namespace
+    spec:
+      backend:
+        serviceName: profiles-app
+        servicePort: 8080
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        component: db
+      name: db
+      namespace: profiles-namespace
+    spec:
+      ports:
+        - name: "3306"
+          port: 3306
+          targetPort: 3306
+      selector:
+        component: db
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        component: profiles-app
+      name: profiles-app
+      namespace: profiles-namespace
+    spec:
+      ports:
+        - name: "8080"
+          port: 8080
+          targetPort: 8080
+      selector:
+        component: profiles-app
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+      labels:
+        component: db
+      name: db
+      namespace: profiles-namespace
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          component: db
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            component: db
+        spec:
+          containers:
+            - env:
+                - name: MYSQL_DATABASE
+                  value: profiles
+                - name: MYSQL_PASSWORD
+                  value: password
+                - name: MYSQL_ROOT_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-secret
+                      key: password
+                - name: MYSQL_USER
+                  value: empuser
+              image: mysql:8.0.20
+              name: db
+              ports:
+                - containerPort: 3306
+              resources:
+                requests:
+                  cpu: 200m
+              volumeMounts:
+                - mountPath: /var/lib/mysql
+                  name: db-data
+          restartPolicy: Always
+          volumes:
+            - name: db-data
+              persistentVolumeClaim:
+                claimName: db-data
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      labels:
+        component: db-data
+      name: db-data
+      namespace: profiles-namespace
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 100Mi
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        component: profiles-app
+      name: profiles-app
+      namespace: profiles-namespace
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          component: profiles-app
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            component: profiles-app
+        spec:
+          containers:
+            - image: shirenkov/m2k8s:latest
+              name: profiles-app
+              ports:
+                - containerPort: 8080
+              resources:
+                requests:
+                  cpu: 200m
+              volumeMounts:
+                - mountPath: /data
+                  name: app-data
+          initContainers:
+            - name: init-db
+              image: busybox
+              command: ['sh', '-c', 'until nc -z db:3306; do echo waiting for db; sleep 2; done;']
+          restartPolicy: Always
+          volumes:
+            - name: app-data
+              persistentVolumeClaim:
+                claimName: app-data
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      labels:
+        component: app-data
+      name: app-data
+      namespace: profiles-namespace
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 100Mi
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: db-secret
+      namespace: profiles-namespace
+    type: Opaque
+    data:
+      password: YWRtaW4=
+  - apiVersion: autoscaling/v1
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: profiles-hpa
+      namespace: profiles-namespace
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: profiles-app
+      minReplicas: 1
+      maxReplicas: 2
+      targetCPUUtilizationPercentage: 80
+  - apiVersion: autoscaling/v1
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: db-hpa
+      namespace: profiles-namespace
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: db
+      minReplicas: 1
+      maxReplicas: 2
+      targetCPUUtilizationPercentage: 80
+kind: List
